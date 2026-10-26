@@ -5,6 +5,22 @@ demo:
   # para mostrar a cobranca dupla acontecendo.
   deduplicacao-ativa: true
 
+# O caminho de falha (CaminhoDeFalhaConfig). Justificativa dos numeros no
+# docs/adr/ADR-006-resiliencia.md.
+estoque:
+  retentativa:
+    # 5 retentativas (6 tentativas ao todo), esperando 1 s, 2 s, 4 s, 8 s, 8 s:
+    # ~23 s de espera antes de desistir e mandar para a DLQ.
+    maximo: 5
+    intervalo-inicial-ms: 1000
+    multiplicador: 2.0
+    intervalo-maximo-ms: 8000
+  dlq:
+    topico: loja.pedido.confirmado.v1.dlq
+    particoes: 3                     # as mesmas do topico principal
+    reprocessar: false               # liga o ReprocessadorDlq
+    maximo-de-reprocessamentos: 3
+
 spring:
   application:
     name: servico-estoque
@@ -17,6 +33,12 @@ spring:
     url: jdbc:postgresql://localhost:15432/aed
     username: aed
     password: aed
+    hikari:
+      # Com o Postgres fora do ar, cada tentativa esperaria 30 s (o padrao) por
+      # uma conexao. Seis tentativas passariam dos 5 min do max.poll.interval.ms
+      # e o consumidor seria expulso do grupo no meio das retentativas.
+      connection-timeout: 2000
+      validation-timeout: 1000
   sql:
     init:
       mode: always          # cria e popula as tabelas a cada subida
@@ -29,15 +51,11 @@ spring:
       auto-offset-reset: earliest
       enable-auto-commit: false       # quem confirma o offset e o nosso codigo
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      # Texto, e nao JsonDeserializer: o EstoqueListener converte o JSON. Assim
+      # a DLQ recebe os bytes originais do produtor, e um JSON quebrado vira
+      # falha permanente com nome (EventoMalformadoException).
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
-        # Ignora qualquer cabecalho de tipo que venha do produtor: a classe a
-        # usar e a NOSSA, nao a dele. E o que permite que os dois servicos
-        # tenham classes diferentes para o mesmo evento.
-        spring.json.use.type.headers: false
-        spring.json.value.default.type: br.pucminas.aed.estoque.domain.PedidoConfirmadoEvent
-        spring.json.trusted.packages: br.pucminas.aed.estoque.domain
-
         # ARMADILHA DE DEMONSTRACAO AO VIVO.
         # Quem cria o topico e o servico-pedidos. Se este consumidor subir antes
         # disso, ele recebe UNKNOWN_TOPIC_OR_PARTITION e so tenta de novo quando
@@ -45,8 +63,16 @@ spring:
         # Cinco segundos e mais que suficiente numa aula.
         metadata.max.age.ms: 5000
 
+    # O estoque agora tambem publica: na DLQ, e no reprocessamento.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
     listener:
-      ack-mode: manual_immediate      # o ack e explicito, depois do commit
+      # o ack e explicito, depois do commit. E tambem o UNICO modo em que o
+      # DefaultErrorHandler confirma sozinho o offset de um evento ja enviado
+      # para a DLQ.
+      ack-mode: manual_immediate
 
 logging:
   level:
