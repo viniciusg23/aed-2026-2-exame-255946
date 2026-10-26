@@ -1,0 +1,84 @@
+# AED - Aula 01 - ambiente da demonstracao ao vivo
+#   docker compose up -d      sobe Kafka (KRaft, sem ZooKeeper) + Postgres + Kafka UI
+#   docker compose down -v    derruba tudo e apaga os volumes
+#
+# O "up -d" so retorna depois que o Kafka fica healthy, porque o kafka-ui
+# declara depends_on com essa condicao. Medido: ~8 s com as imagens ja
+# baixadas. Quando o comando volta, o broker ja aceita conexao.
+#
+# PORTAS ALTAS DE PROPOSITO. As portas padrao 9092 e 5432 costumam ja estar
+# ocupadas por instalacoes locais de Kafka e Postgres — e quando isso acontece
+# o cliente conecta no servico errado e o erro que aparece e de autenticacao,
+# nao de porta ocupada. Custa uma hora de depuracao. Aqui usamos 19092 e 15432.
+services:
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: aed-kafka
+    ports:
+      - "19092:9092"          # acesso a partir do host
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # Tres listeners com papeis distintos:
+      #   PLAINTEXT  quem conecta de fora do Docker (a aplicacao, o kafka-console)
+      #   INTERNAL   quem conecta de dentro da rede do compose (kafka-ui)
+      #   CONTROLLER o quorum KRaft; precisa de endereco ROTEAVEL, nunca 0.0.0.0,
+      #              porque o Kafka o valida junto com os listeners anunciados
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9094,CONTROLLER://localhost:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:19092,INTERNAL://kafka:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      # Usa o listener INTERNAL de proposito. Se apontasse para localhost:9092,
+      # o broker responderia com o endereco ANUNCIADO (localhost:19092) e a
+      # sonda tentaria conectar nessa porta dentro do container, onde nada
+      # escuta — o broker ficaria eternamente "unhealthy" estando saudavel.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9094 --list || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: aed-postgres
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_DB: aed
+      POSTGRES_USER: aed
+      POSTGRES_PASSWORD: aed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aed -d aed"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  # Interface web para inspecionar topicos, particoes e mensagens.
+  # Sobe junto com o resto: http://localhost:8081
+  #
+  # Era opcional, atras do profile "ui", e virou padrao em 02/08. Numa aula
+  # sobre eventos, poder ABRIR a mensagem e mostrar os cabecalhos ce_* vale
+  # mais do que economizar um container — e um passo a menos para esquecer
+  # de dar antes de comecar.
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: aed-kafka-ui
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: aed
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9094   # listener INTERNAL
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      kafka:
+        condition: service_healthy

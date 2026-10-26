@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.3.5</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>br.pucminas.aed</groupId>
+  <artifactId>servico-pedidos</artifactId>
+  <version>1.0</version>
+  <name>AED - Aula 01 - Servico de Pedidos (API + produtor)</name>
+
+  <!--
+    Projeto INDEPENDENTE, de proposito. Nao ha pom pai comum com o
+    servico-estoque, nem modulo de contrato compartilhado: o contrato entre os
+    dois e o JSON que trafega no topico, e mais nada. Compartilhar um JAR
+    recriaria o acoplamento de compilacao que os eventos deveriam eliminar.
+
+    Repare tambem no que NAO esta nas dependencias: nenhum driver de banco.
+    Este servico afirma o fato e vai embora; quem persiste e outro.
+  -->
+
+  <properties>
+    <java.version>21</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

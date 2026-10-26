@@ -1,0 +1,11 @@
+{
+  "eventoId":   "11111111-1111-1111-1111-111111111111",
+  "ocorridoEm": "2026-08-03T22:14:07.512Z",
+  "pedidoId":   "4711",
+  "clienteId":  "c-9931",
+  "valorTotal": 289.90,
+  "moeda":      "BRL",
+  "itens": [
+    { "sku": "TEC-002", "quantidade": 1, "preco": 289.90 }
+  ]
+}

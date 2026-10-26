@@ -1,0 +1,57 @@
+demo:
+  topico: loja.pedido.confirmado.v1
+  sku: TEC-002
+  # Passo 3 do roteiro: suba este servico com --demo.deduplicacao-ativa=false
+  # para mostrar a cobranca dupla acontecendo.
+  deduplicacao-ativa: true
+
+spring:
+  application:
+    name: servico-estoque
+
+  # Sem servidor web: um consumidor nao precisa de porta HTTP.
+  main:
+    web-application-type: none
+
+  datasource:
+    url: jdbc:postgresql://localhost:15432/aed
+    username: aed
+    password: aed
+  sql:
+    init:
+      mode: always          # cria e popula as tabelas a cada subida
+
+  kafka:
+    bootstrap-servers: localhost:19092
+
+    consumer:
+      group-id: estoque
+      auto-offset-reset: earliest
+      enable-auto-commit: false       # quem confirma o offset e o nosso codigo
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        # Ignora qualquer cabecalho de tipo que venha do produtor: a classe a
+        # usar e a NOSSA, nao a dele. E o que permite que os dois servicos
+        # tenham classes diferentes para o mesmo evento.
+        spring.json.use.type.headers: false
+        spring.json.value.default.type: br.pucminas.aed.estoque.domain.PedidoConfirmadoEvent
+        spring.json.trusted.packages: br.pucminas.aed.estoque.domain
+
+        # ARMADILHA DE DEMONSTRACAO AO VIVO.
+        # Quem cria o topico e o servico-pedidos. Se este consumidor subir antes
+        # disso, ele recebe UNKNOWN_TOPIC_OR_PARTITION e so tenta de novo quando
+        # os metadados expiram — o padrao sao 5 MINUTOS de tela parada.
+        # Cinco segundos e mais que suficiente numa aula.
+        metadata.max.age.ms: 5000
+
+    listener:
+      ack-mode: manual_immediate      # o ack e explicito, depois do commit
+
+logging:
+  level:
+    root: WARN
+    br.pucminas.aed: INFO
+    org.springframework.boot: INFO
+  pattern:
+    console: "%d{HH:mm:ss} %-5level %-28logger{0} : %msg%n"
