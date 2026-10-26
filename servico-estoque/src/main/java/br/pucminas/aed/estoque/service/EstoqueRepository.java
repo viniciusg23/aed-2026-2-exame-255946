@@ -102,6 +102,37 @@ public class EstoqueRepository {
                 new ItemReservadoMapper(), pedidoId);
     }
 
+    /** A compensacao: a quantidade reservada volta ao estoque. */
+    public void devolver(String sku, int quantidade) {
+        jdbc.update("UPDATE estoque SET quantidade = quantidade + ? WHERE sku = ?",
+                Integer.valueOf(quantidade), sku);
+    }
+
+    // ------------------------------------------------------------------
+    // pagamento recusado
+    // ------------------------------------------------------------------
+
+    /**
+     * Mesmo mecanismo do registrarEventoSeNovo, com a chave no pedido.
+     *
+     * @return true se e a primeira recusa deste pedido; false se o pedido ja
+     *         teve a recusa tratada antes.
+     */
+    public boolean registrarRecusaSeNova(String pedidoId, String eventoId, String motivo,
+                                         boolean reservaDevolvida) {
+        int linhas = jdbc.update(
+                "INSERT INTO pagamento_recusado (pedido_id, evento_id, motivo, reserva_devolvida)"
+                        + " VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                pedidoId, eventoId, motivo, Boolean.valueOf(reservaDevolvida));
+        return linhas == 1;
+    }
+
+    public boolean pagamentoFoiRecusado(String pedidoId) {
+        Long total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pagamento_recusado WHERE pedido_id = ?", Long.class, pedidoId);
+        return total != null && total.longValue() > 0L;
+    }
+
     public int quantidadeEmEstoque(String sku) {
         Integer quantidade = jdbc.queryForObject(
                 "SELECT quantidade FROM estoque WHERE sku = ?", Integer.class, sku);

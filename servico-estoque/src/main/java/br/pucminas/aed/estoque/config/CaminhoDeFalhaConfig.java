@@ -49,23 +49,36 @@ public class CaminhoDeFalhaConfig {
     /** Instante da falha, em ISO-8601. */
     public static final String CABECALHO_FALHOU_EM = "dlq_falhou_em";
 
+    /** Cada topico consumido tem a sua DLQ: o mesmo nome, com este sufixo. */
+    private static final String SUFIXO_DLQ = ".dlq";
+
     private static final Logger log = LoggerFactory.getLogger(CaminhoDeFalhaConfig.class);
 
-    private final String topicoDlq;
-
-    public CaminhoDeFalhaConfig(@Value("${estoque.dlq.topico}") String topicoDlq) {
-        this.topicoDlq = topicoDlq;
-    }
-
     /**
-     * A DLQ e declarada aqui, com o MESMO numero de particoes do topico
-     * principal. O recoverer publica na mesma particao de onde o evento veio;
+     * As DLQs sao declaradas aqui, com o MESMO numero de particoes dos topicos
+     * de origem. O recoverer publica na mesma particao de onde o evento veio;
      * se o broker criasse a DLQ sozinho, ela nasceria com uma particao so e o
      * envio para as particoes 1 e 2 falharia.
      */
     @Bean
-    public NewTopic topicoDaDlq(@Value("${estoque.dlq.particoes}") int particoes) {
-        return new NewTopic(topicoDlq, particoes, (short) 1);
+    public NewTopic topicoDaDlq(@Value("${estoque.dlq.topico}") String topico,
+                                @Value("${estoque.dlq.particoes}") int particoes) {
+        return new NewTopic(topico, particoes, (short) 1);
+    }
+
+    @Bean
+    public NewTopic topicoDaDlqDePagamentoRecusado(
+            @Value("${estoque.dlq.topico-pagamento-recusado}") String topico,
+            @Value("${estoque.dlq.particoes}") int particoes) {
+        return new NewTopic(topico, particoes, (short) 1);
+    }
+
+    /** O topico da compensacao, criado por quem publica. */
+    @Bean
+    public NewTopic topicoDeReservaCancelada(
+            @Value("${estoque.topico-reserva-cancelada}") String topico,
+            @Value("${estoque.dlq.particoes}") int particoes) {
+        return new NewTopic(topico, particoes, (short) 1);
     }
 
     @Bean
@@ -95,10 +108,19 @@ public class CaminhoDeFalhaConfig {
         return tratador;
     }
 
+    /**
+     * loja.pedido.confirmado.v1  -> loja.pedido.confirmado.v1.dlq
+     * loja.pagamento.recusado.v1 -> loja.pagamento.recusado.v1.dlq
+     *
+     * Um evento que falha ao ser lido DA PROPRIA DLQ (pelo ReprocessadorDlq)
+     * volta para a mesma DLQ, e nao para uma ".dlq.dlq".
+     */
     private TopicPartition destinoNaDlq(ConsumerRecord<?, ?> registro, Exception erro) {
+        String origem = registro.topic();
+        String destino = origem.endsWith(SUFIXO_DLQ) ? origem : origem + SUFIXO_DLQ;
         log.error("evento enviado para a DLQ  topico={}  particao={}  offset={}  motivo={}",
-                registro.topic(), registro.partition(), registro.offset(), motivo(erro).getMessage());
-        return new TopicPartition(topicoDlq, registro.partition());
+                origem, registro.partition(), registro.offset(), motivo(erro).getMessage());
+        return new TopicPartition(destino, registro.partition());
     }
 
     /**

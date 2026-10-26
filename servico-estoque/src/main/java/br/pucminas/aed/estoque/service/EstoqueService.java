@@ -52,6 +52,16 @@ public class EstoqueService {
             log.warn("deduplicacao DESLIGADA - processando {} sem verificar", eventoId);
         }
 
+        // O PagamentoRecusado pode chegar ANTES do PedidoConfirmado: sao topicos
+        // diferentes, e nao ha ordem entre eles. Ou o PedidoConfirmado pode
+        // voltar da DLQ depois da recusa. Nos dois casos, reservar agora
+        // prenderia estoque de um pedido que nao vai ser pago.
+        if (repositorio.pagamentoFoiRecusado(evento.getPedidoId())) {
+            log.warn("pagamento do pedido {} ja foi recusado; reserva NAO feita  evento={}",
+                    evento.getPedidoId(), eventoId);
+            return false;
+        }
+
         reservarItens(eventoId, evento);
 
         log.info("reserva aplicada  evento={}  pedido={}", eventoId, evento.getPedidoId());

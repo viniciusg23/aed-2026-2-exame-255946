@@ -8,6 +8,10 @@ demo:
 # O caminho de falha (CaminhoDeFalhaConfig). Justificativa dos numeros no
 # docs/adr/ADR-006-resiliencia.md.
 estoque:
+  # Parte B: a compensacao
+  topico-pagamento-recusado: loja.pagamento.recusado.v1       # consome
+  topico-reserva-cancelada: loja.estoque.reservacancelada.v1   # publica
+
   retentativa:
     # 5 retentativas (6 tentativas ao todo), esperando 1 s, 2 s, 4 s, 8 s, 8 s:
     # ~23 s de espera antes de desistir e mandar para a DLQ.
@@ -16,8 +20,10 @@ estoque:
     multiplicador: 2.0
     intervalo-maximo-ms: 8000
   dlq:
+    # cada topico consumido tem a sua DLQ: <topico>.dlq
     topico: loja.pedido.confirmado.v1.dlq
-    particoes: 3                     # as mesmas do topico principal
+    topico-pagamento-recusado: loja.pagamento.recusado.v1.dlq
+    particoes: 3                     # as mesmas dos topicos de origem
     reprocessar: false               # liga o ReprocessadorDlq
     maximo-de-reprocessamentos: 3
 

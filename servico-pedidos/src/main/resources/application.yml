@@ -1,5 +1,7 @@
 demo:
   topico: loja.pedido.confirmado.v1
+  # publicado pelo POST /pagamentos/recusados, que simula o pagamento
+  topico-pagamento-recusado: loja.pagamento.recusado.v1
 
 spring:
   application:

@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import br.pucminas.aed.pedidos.domain.PagamentoRecusadoEvent;
 import br.pucminas.aed.pedidos.domain.PedidoConfirmadoEvent;
 
 @Configuration
@@ -37,6 +38,12 @@ public class PedidoConfig {
      */
     @Bean
     public NewTopic topicoDePedidoConfirmado(@Value("${demo.topico}") String topico) {
+        return new NewTopic(topico, PARTICOES, REPLICAS);
+    }
+
+    /** O topico da recusa, criado por quem publica — como o de PedidoConfirmado. */
+    @Bean
+    public NewTopic topicoDePagamentoRecusado(@Value("${demo.topico-pagamento-recusado}") String topico) {
         return new NewTopic(topico, PARTICOES, REPLICAS);
     }
 
@@ -95,5 +102,28 @@ public class PedidoConfig {
                         config, new StringSerializer(), serializadorDoValor);
 
         return new KafkaTemplate<String, PedidoConfirmadoEvent>(fabrica);
+    }
+
+    /**
+     * O mesmo template, para o PagamentoRecusado: mesmo ObjectMapper (datas em
+     * ISO-8601), mesma configuracao do yml. O Spring escolhe entre os dois pelo
+     * tipo generico do ponto de injecao.
+     */
+    @Bean
+    public KafkaTemplate<String, PagamentoRecusadoEvent> kafkaTemplateDePagamento(
+            KafkaProperties propriedades, ObjectMapper objectMapperDosEventos) {
+
+        JsonSerializer<PagamentoRecusadoEvent> serializadorDoValor =
+                new JsonSerializer<PagamentoRecusadoEvent>(objectMapperDosEventos);
+
+        Map<String, Object> config = propriedades.buildProducerProperties(null);
+        config.remove(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG);
+        config.remove(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
+
+        ProducerFactory<String, PagamentoRecusadoEvent> fabrica =
+                new DefaultKafkaProducerFactory<String, PagamentoRecusadoEvent>(
+                        config, new StringSerializer(), serializadorDoValor);
+
+        return new KafkaTemplate<String, PagamentoRecusadoEvent>(fabrica);
     }
 }

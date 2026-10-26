@@ -32,3 +32,17 @@ CREATE TABLE IF NOT EXISTS reserva (
 );
 
 CREATE INDEX IF NOT EXISTS reserva_por_pedido ON reserva (pedido_id);
+
+-- O fato "o pagamento deste pedido foi recusado", do ponto de vista do estoque.
+-- A chave e o PEDIDO, nao o evento: duas recusas do mesmo pedido, mesmo com
+-- ce_id diferentes, devolvem o estoque uma vez so.
+-- reserva_devolvida = false registra a recusa que chegou sem reserva (antes do
+-- PedidoConfirmado, ou de um pedido que nunca reservou). Se o PedidoConfirmado
+-- chegar depois, o estoque sabe que nao deve reservar.
+CREATE TABLE IF NOT EXISTS pagamento_recusado (
+  pedido_id         VARCHAR(64)  PRIMARY KEY,
+  evento_id         VARCHAR(64)  NOT NULL,     -- ce_id do PagamentoRecusado
+  motivo            VARCHAR(500),
+  reserva_devolvida BOOLEAN      NOT NULL,
+  recebido_em       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
