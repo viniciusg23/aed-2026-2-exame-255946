@@ -1,7 +1,14 @@
 package br.pucminas.aed.estoque.service;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
+
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+
+import br.pucminas.aed.estoque.domain.ItemDoPedidoVO;
 
 /**
  * Toda a persistencia deste servico, num lugar so.
@@ -76,6 +83,25 @@ public class EstoqueRepository {
                 Integer.valueOf(quantidade), sku);
     }
 
+    /**
+     * Registra o que foi debitado para o pedido. E o que permite, depois,
+     * devolver exatamente isso. So INSERT: a reserva e historico.
+     */
+    public void registrarReserva(String pedidoId, String sku, int quantidade, String eventoId) {
+        jdbc.update("INSERT INTO reserva (pedido_id, sku, quantidade, evento_id) VALUES (?, ?, ?, ?)",
+                pedidoId, sku, Integer.valueOf(quantidade), eventoId);
+    }
+
+    /**
+     * O que foi reservado para o pedido, somado por SKU; lista vazia se nada
+     * foi reservado.
+     */
+    public List<ItemDoPedidoVO> reservasDoPedido(String pedidoId) {
+        return jdbc.query("SELECT sku, SUM(quantidade) AS quantidade FROM reserva"
+                        + " WHERE pedido_id = ? GROUP BY sku ORDER BY sku",
+                new ItemReservadoMapper(), pedidoId);
+    }
+
     public int quantidadeEmEstoque(String sku) {
         Integer quantidade = jdbc.queryForObject(
                 "SELECT quantidade FROM estoque WHERE sku = ?", Integer.class, sku);
@@ -89,5 +115,13 @@ public class EstoqueRepository {
     public void redefinirEstoque(String sku, int quantidade) {
         jdbc.update("UPDATE estoque SET quantidade = ? WHERE sku = ?",
                 Integer.valueOf(quantidade), sku);
+    }
+
+    /** Converte uma linha da tabela reserva no item que foi reservado. */
+    private static class ItemReservadoMapper implements RowMapper<ItemDoPedidoVO> {
+        @Override
+        public ItemDoPedidoVO mapRow(ResultSet linha, int numero) throws SQLException {
+            return new ItemDoPedidoVO(linha.getString("sku"), linha.getInt("quantidade"));
+        }
     }
 }

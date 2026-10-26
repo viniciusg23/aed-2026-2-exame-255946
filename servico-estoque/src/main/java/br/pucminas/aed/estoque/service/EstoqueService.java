@@ -52,7 +52,7 @@ public class EstoqueService {
             log.warn("deduplicacao DESLIGADA - processando {} sem verificar", eventoId);
         }
 
-        reservarItens(evento);
+        reservarItens(eventoId, evento);
 
         log.info("reserva aplicada  evento={}  pedido={}", eventoId, evento.getPedidoId());
         return true;
@@ -65,8 +65,11 @@ public class EstoqueService {
      * isso e o que importa: o rollback desfaz o registro do eventoId e qualquer
      * item ja debitado deste mesmo pedido. Se o eventoId ficasse gravado, o
      * evento reprocessado a partir da DLQ seria descartado como duplicata.
+     *
+     * Cada item debitado e registrado na tabela reserva, na mesma transacao:
+     * o debito e o registro do que devolver acontecem juntos ou nao acontecem.
      */
-    private void reservarItens(PedidoConfirmadoEvent evento) {
+    private void reservarItens(String eventoId, PedidoConfirmadoEvent evento) {
         List<ItemDoPedidoVO> itens = evento.getItens();
         for (ItemDoPedidoVO item : itens) {
             if (item.getQuantidade() <= 0) {
@@ -77,6 +80,7 @@ public class EstoqueService {
             if (linhas == 0) {
                 throw new SkuInexistenteException(evento.getPedidoId(), item.getSku());
             }
+            repositorio.registrarReserva(evento.getPedidoId(), item.getSku(), item.getQuantidade(), eventoId);
         }
     }
 }
