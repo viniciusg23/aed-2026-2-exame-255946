@@ -56,6 +56,15 @@ public class TestPublisher {
                 + "\"preco\":289.90}]"                 // idem, dentro do item
                 + "}";
 
+        publicarCorpo(eventoId, pedidoId, json);
+    }
+
+    /**
+     * Publica um corpo qualquer, com o mesmo envelope. Serve para os casos que
+     * o metodo acima nao monta: varios itens, JSON quebrado, ou o corpo exato
+     * que saiu da DLQ.
+     */
+    public void publicarCorpo(String eventoId, String pedidoId, String json) {
         ProducerRecord<String, String> registro =
                 new ProducerRecord<String, String>(topico, pedidoId, json);
 
