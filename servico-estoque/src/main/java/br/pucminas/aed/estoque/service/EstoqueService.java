@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import br.pucminas.aed.estoque.domain.ItemDoPedidoVO;
 import br.pucminas.aed.estoque.domain.PedidoConfirmadoEvent;
+import br.pucminas.aed.estoque.domain.QuantidadeInvalidaException;
+import br.pucminas.aed.estoque.domain.SkuInexistenteException;
 
 /**
  * O coracao da demonstracao.
@@ -56,11 +58,25 @@ public class EstoqueService {
         return true;
     }
 
-    /** Percorrer os itens e orquestracao, e por isso mora aqui, nao no repositorio. */
+    /**
+     * Percorrer os itens e orquestracao, e por isso mora aqui, nao no repositorio.
+     *
+     * As falhas permanentes sao lancadas DENTRO da transacao de processar(), e
+     * isso e o que importa: o rollback desfaz o registro do eventoId e qualquer
+     * item ja debitado deste mesmo pedido. Se o eventoId ficasse gravado, o
+     * evento reprocessado a partir da DLQ seria descartado como duplicata.
+     */
     private void reservarItens(PedidoConfirmadoEvent evento) {
         List<ItemDoPedidoVO> itens = evento.getItens();
         for (ItemDoPedidoVO item : itens) {
-            repositorio.reservar(item.getSku(), item.getQuantidade());
+            if (item.getQuantidade() <= 0) {
+                throw new QuantidadeInvalidaException(
+                        evento.getPedidoId(), item.getSku(), item.getQuantidade());
+            }
+            int linhas = repositorio.reservar(item.getSku(), item.getQuantidade());
+            if (linhas == 0) {
+                throw new SkuInexistenteException(evento.getPedidoId(), item.getSku());
+            }
         }
     }
 }

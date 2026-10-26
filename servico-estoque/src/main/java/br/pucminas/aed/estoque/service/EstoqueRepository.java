@@ -63,9 +63,16 @@ public class EstoqueRepository {
     // estoque
     // ------------------------------------------------------------------
 
-    /** O efeito de negocio: baixar a quantidade reservada. */
-    public void reservar(String sku, int quantidade) {
-        jdbc.update("UPDATE estoque SET quantidade = quantidade - ? WHERE sku = ?",
+    /**
+     * O efeito de negocio: baixar a quantidade reservada.
+     *
+     * Devolve o numero de linhas afetadas. Zero quer dizer que o SKU nao existe
+     * — o UPDATE nao reclama disso, entao quem decide o que fazer e o service.
+     *
+     * @return 1 se o SKU existe e foi debitado; 0 se o SKU nao existe.
+     */
+    public int reservar(String sku, int quantidade) {
+        return jdbc.update("UPDATE estoque SET quantidade = quantidade - ? WHERE sku = ?",
                 Integer.valueOf(quantidade), sku);
     }
 
