@@ -1,0 +1,11 @@
+{
+  "eventoId":   "90010000-0000-0000-0000-000000000001",
+  "ocorridoEm": "2026-10-26T12:00:00.000Z",
+  "pedidoId":   "9001",
+  "clienteId":  "c-9931",
+  "valorTotal": 49.90,
+  "moeda":      "BRL",
+  "itens": [
+    { "sku": "XYZ-999", "quantidade": 1, "preco": 49.90 }
+  ]
+}

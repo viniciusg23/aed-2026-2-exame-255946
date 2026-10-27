@@ -1,3 +1,264 @@
+# Exame especial — como reproduzir
+
+**A falha e a volta: DLQ e compensação no Mercado Rápido.** O `servico-estoque`
+passa a distinguir a falha que passa (retentativa com limite) da que não passa
+(DLQ), e devolve a reserva quando o pagamento é recusado, publicando
+`ReservaDeEstoqueCancelada`. As decisões estão em
+[`docs/adr/ADR-006-resiliencia.md`](docs/adr/ADR-006-resiliencia.md).
+
+| Tópico | Quem publica | Quem consome |
+|---|---|---|
+| `loja.pedido.confirmado.v1` | `servico-pedidos` | `servico-estoque` |
+| `loja.pedido.confirmado.v1.dlq` | `servico-estoque` (falha) | `ReprocessadorDlq`, se ligado |
+| `loja.pagamento.recusado.v1` | `servico-pedidos` (`POST /pagamentos/recusados`) | `servico-estoque` |
+| `loja.pagamento.recusado.v1.dlq` | `servico-estoque` (falha) | ninguém |
+| `loja.estoque.reservacancelada.v1` | `servico-estoque` | ninguém, por enquanto |
+
+Os comandos abaixo rodam **da raiz do repositório** e estão em uma linha só.
+No PowerShell, use `curl.exe` no lugar de `curl` (ver
+["Windows: curl não é o curl"](#windows-curl-não-é-o-curl)).
+
+## Testes automatizados
+
+Os três cenários também são cobertos por teste, com Kafka embutido e H2 — sem
+Docker:
+
+```bash
+mvn -f servico-estoque/pom.xml test
+```
+
+| Cenário | Teste |
+|---|---|
+| 1 — falha permanente vai para a DLQ, com `ce_id` e motivo, sem retentar | `CaminhoDeFalhaTest` A1, A2, A3, A4 |
+| 1 — o offset do evento enviado para a DLQ é confirmado | `CaminhoDeFalhaTest` A4b |
+| 1 — reprocessar da DLQ debita uma vez; reprocessar de novo não debita | `CaminhoDeFalhaTest` A6 |
+| 2 — falha transitória é retentada e o evento é processado | `CaminhoDeFalhaTest` A5 |
+| 3 — a recusa devolve o reservado e publica `ReservaDeEstoqueCancelada` | `CompensacaoTest` B1, B2 |
+| 3 — a mesma recusa (ou outra do mesmo pedido) devolve uma vez só | `CompensacaoTest` B3, B4 |
+| 3 — recusa sem reserva; `PedidoConfirmado` que chega depois da recusa | `CompensacaoTest` B5, B6 |
+
+Esperado: `Tests run: 17, Failures: 0, Errors: 0` e `BUILD SUCCESS`.
+
+## Preparação
+
+Os passos 1 a 3 do roteiro original, mais abaixo: subir a infraestrutura,
+compilar e subir os dois serviços.
+
+```bash
+docker compose up -d
+mvn -f servico-pedidos/pom.xml package -DskipTests
+mvn -f servico-estoque/pom.xml package -DskipTests
+java -jar servico-pedidos/target/servico-pedidos-1.0.jar       # terminal 1
+java -jar servico-estoque/target/servico-estoque-1.0.jar       # terminal 2
+```
+
+Para ver o estado do estoque em qualquer momento:
+
+```bash
+docker compose exec postgres psql -U aed -d aed -c "select * from estoque order by sku;"
+```
+
+Os eventos e seus cabeçalhos também podem ser vistos na Kafka UI,
+<http://localhost:8081> → *Topics* → tópico → *Messages*.
+
+> Para repetir os cenários do zero: `docker compose down -v`, `docker compose up -d`
+> e suba os dois serviços de novo.
+
+---
+
+## Cenário 1 — falha permanente: SKU inexistente vai para a DLQ
+
+O pedido `9001` pede o SKU `XYZ-999`, que não existe na tabela `estoque`.
+
+```bash
+curl -X POST localhost:8080/pedidos/confirmados -H "Content-Type: application/json" -d "@pedidos/pedido-9001-sku-inexistente.json"
+```
+
+Esperado no terminal do `servico-estoque` — **uma** tentativa, e direto para a
+DLQ:
+
+```
+WARN  CaminhoDeFalhaConfig : falha na tentativa 1  topico=loja.pedido.confirmado.v1  particao=0  offset=0  motivo=pedido 9001 pede o SKU XYZ-999, que nao existe no estoque
+ERROR CaminhoDeFalhaConfig : evento enviado para a DLQ  topico=loja.pedido.confirmado.v1  particao=0  offset=0  motivo=pedido 9001 pede o SKU XYZ-999, que nao existe no estoque
+```
+
+O evento na DLQ, com os cabeçalhos:
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9094 --topic loja.pedido.confirmado.v1.dlq --from-beginning --max-messages 1 --property print.headers=true
+```
+
+Esperado — os cabeçalhos CloudEvents **originais**, `ce_id` inclusive, e o
+motivo em três cabeçalhos próprios (os `kafka_dlt-*` do Spring vêm junto,
+inclusive o stacktrace):
+
+```
+ce_specversion:1.0
+ce_id:90010000-0000-0000-0000-000000000001
+ce_source:/loja/servico-pedidos
+ce_type:loja.pedido.confirmado.v1
+ce_time:2026-10-26T12:00:00Z
+...
+dlq_excecao:br.pucminas.aed.estoque.domain.SkuInexistenteException
+dlq_mensagem:pedido 9001 pede o SKU XYZ-999, que nao existe no estoque
+dlq_falhou_em:2026-10-26T23:58:50.093257Z
+```
+
+seguido do corpo **original**, com todos os campos do produtor
+(`"clienteId":"c-9931"`, `"valorTotal":49.90`...). O estoque não mudou
+(`TEC-002 | 100`) e o `eventoId` não ficou em `evento_processado`.
+
+### Reprocessar a partir da DLQ
+
+Primeiro, corrigir a causa: o SKU passa a existir.
+
+```bash
+docker compose exec postgres psql -U aed -d aed -c "INSERT INTO estoque (sku, quantidade) VALUES ('XYZ-999', 10);"
+```
+
+Depois, derrubar o `servico-estoque` (Ctrl+C) e subi-lo com o reprocessador
+ligado. Ele é **desligado por padrão**: reprocessar é decisão de quem operou a
+correção.
+
+```bash
+java -jar servico-estoque/target/servico-estoque-1.0.jar --estoque.dlq.reprocessar=true
+```
+
+Esperado — o evento volta ao tópico principal e é processado:
+
+```
+INFO  ReprocessadorDlq : evento devolvido ao topico loja.pedido.confirmado.v1  chave=9001  reprocessamento=1
+INFO  EstoqueService   : reserva aplicada  evento=90010000-0000-0000-0000-000000000001  pedido=9001
+```
+
+e `XYZ-999 | 9`. Derrube o serviço e suba-o de novo **sem** a opção.
+
+**Reprocessar duas vezes não debita duas vezes.** Para provar, volte o grupo do
+reprocessador ao início da DLQ e reprocesse de novo (com o `servico-estoque`
+parado):
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9094 --group estoque-reprocessador --reset-offsets --to-earliest --topic loja.pedido.confirmado.v1.dlq --execute
+java -jar servico-estoque/target/servico-estoque-1.0.jar --estoque.dlq.reprocessar=true
+```
+
+Esperado — o mesmo `ce_id` é reconhecido e descartado; o estoque continua
+`XYZ-999 | 9`:
+
+```
+INFO  ReprocessadorDlq : evento devolvido ao topico loja.pedido.confirmado.v1  chave=9001  reprocessamento=1
+INFO  EstoqueService   : evento 90010000-0000-0000-0000-000000000001 JA PROCESSADO, descartando em silencio
+```
+
+> Um evento cuja causa **não** foi corrigida volta para a DLQ. O cabeçalho
+> `dlq_reprocessamentos` viaja com ele, e depois de 3 voltas o reprocessador
+> o deixa na DLQ, em vez de ciclar para sempre.
+
+---
+
+## Cenário 2 — falha transitória: Postgres fora do ar
+
+Com os dois serviços no ar (o `servico-estoque` **sem** o reprocessador):
+
+```bash
+docker compose stop postgres
+curl -X POST localhost:8080/pedidos/confirmados -H "Content-Type: application/json" -d "@pedidos/pedido-9002.json"
+```
+
+O `servico-estoque` retenta, com espera crescente (1 s, 2 s, 4 s, 8 s, 8 s):
+
+```
+WARN  CaminhoDeFalhaConfig : falha na tentativa 1  topico=loja.pedido.confirmado.v1  particao=1  offset=0  motivo=Connection refused
+WARN  CaminhoDeFalhaConfig : falha na tentativa 2  topico=loja.pedido.confirmado.v1  particao=1  offset=0  motivo=Connection refused
+WARN  CaminhoDeFalhaConfig : falha na tentativa 3  topico=loja.pedido.confirmado.v1  particao=1  offset=0  motivo=Connection refused
+```
+
+**Em menos de ~25 segundos**, religue o Postgres:
+
+```bash
+docker compose start postgres
+```
+
+Esperado — a tentativa seguinte passa:
+
+```
+INFO  EstoqueService : reserva aplicada  evento=90020000-0000-0000-0000-000000000001  pedido=9002
+```
+
+e `TEC-002 | 99`.
+
+> **Se o Postgres demorar mais que a janela**, as 6 tentativas se esgotam
+> (~35 s) e o evento vai para a DLQ com `motivo=Connection refused`. Não se
+> perde: volta pelo reprocessamento do cenário 1.
+
+---
+
+## Cenário 3 — compensação: pagamento recusado devolve a reserva
+
+O pedido `9003` reserva 2 unidades do `TEC-002`:
+
+```bash
+curl -X POST localhost:8080/pedidos/confirmados -H "Content-Type: application/json" -d "@pedidos/pedido-9003.json"
+docker compose exec postgres psql -U aed -d aed -c "select * from estoque where sku='TEC-002'; select pedido_id, sku, quantidade from reserva where pedido_id='9003';"
+```
+
+Esperado: `TEC-002 | 97` (partindo de 99, depois do cenário 2) e a reserva
+registrada: `9003 | TEC-002 | 2`.
+
+O pagamento é recusado:
+
+```bash
+curl -X POST localhost:8080/pagamentos/recusados -H "Content-Type: application/json" -d "@pedidos/recusa-9003.json"
+```
+
+Esperado no `servico-estoque`:
+
+```
+INFO  CompensacaoService : reserva devolvida  pedido=9003  recusa=90030000-0000-0000-0000-0000000000f1  itens=[ItemDoPedidoVO{sku=TEC-002, quantidade=2}]
+```
+
+O estoque volta, e **nada foi apagado** — a reserva continua registrada, e a
+recusa fica ao lado dela:
+
+```bash
+docker compose exec postgres psql -U aed -d aed -c "select * from estoque where sku='TEC-002'; select pedido_id, sku, quantidade from reserva where pedido_id='9003'; select pedido_id, evento_id, reserva_devolvida from pagamento_recusado;"
+```
+
+```
+ TEC-002 |  99
+ 9003    | TEC-002 | 2
+ 9003    | 90030000-0000-0000-0000-0000000000f1 | t
+```
+
+O evento de compensação no tópico:
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9094 --topic loja.estoque.reservacancelada.v1 --from-beginning --timeout-ms 8000 --property print.headers=true --property print.key=true
+```
+
+```
+ce_specversion:1.0,ce_id:87f58730-c213-3784-95ff-470736eab805,ce_source:/loja/servico-estoque,ce_type:loja.estoque.reservacancelada.v1,ce_time:2026-10-27T00:09:13.569814Z	9003	{"eventoId":"87f58730-c213-3784-95ff-470736eab805","ocorridoEm":"2026-10-27T00:09:13.569814Z","pedidoId":"9003","pagamentoRecusadoId":"90030000-0000-0000-0000-0000000000f1","itens":[{"sku":"TEC-002","quantidade":2}]}
+```
+
+O `ce_id` não é sorteado: é derivado do pedido, e por isso é sempre
+`87f58730-...` para o pedido `9003`. Se a mesma compensação for publicada duas
+vezes, quem consome deduplica.
+
+**A mesma recusa entregue de novo não devolve de novo:**
+
+```bash
+curl -X POST localhost:8080/pagamentos/recusados -H "Content-Type: application/json" -d "@pedidos/recusa-9003.json"
+```
+
+```
+INFO  CompensacaoService : recusa 90030000-0000-0000-0000-0000000000f1 JA PROCESSADA, descartando em silencio
+```
+
+O estoque continua `TEC-002 | 99`, e o tópico `loja.estoque.reservacancelada.v1`
+continua com **um** evento.
+
+---
+
 # Aula 01 — Demonstração: o consumidor idempotente
 
 **AED — Arquitetura Reativa e Event-Driven · PUC Minas / IEC**
