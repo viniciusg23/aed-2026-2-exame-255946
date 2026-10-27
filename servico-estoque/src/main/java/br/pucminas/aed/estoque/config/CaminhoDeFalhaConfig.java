@@ -104,6 +104,11 @@ public class CaminhoDeFalhaConfig {
 
         DefaultErrorHandler tratador = new DefaultErrorHandler(recoverer, espera);
         tratador.addNotRetryableExceptions(ReservaImpossivelException.class);
+        // Confirma o offset do evento depois que ele foi para a DLQ. O padrao e
+        // NAO confirmar: o evento continuaria "nao lido" para o grupo, e a cada
+        // reinicio seria consumido e mandado para a DLQ de novo. So funciona
+        // com ack-mode manual_immediate, que e o deste servico.
+        tratador.setCommitRecovered(true);
         tratador.setRetryListeners(this::registrarTentativa);
         return tratador;
     }

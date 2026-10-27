@@ -8,16 +8,22 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.awaitility.Awaitility;
@@ -188,6 +194,29 @@ class CaminhoDeFalhaTest {
         assertThat(naDlq.value()).isEqualTo(corpoQuebrado);
     }
 
+    /**
+     * Sem isto, o evento enviado para a DLQ continua "nao lido" para o grupo:
+     * a cada reinicio do servico ele seria consumido de novo e mandado de novo
+     * para a DLQ — copias duplicadas, e o operador sem saber qual e qual.
+     */
+    @Test
+    @Order(5)
+    @DisplayName("A4b - depois de enviar para a DLQ, o offset do evento e confirmado")
+    void offsetDoEventoNaDlqEConfirmado() throws Exception {
+        String eventoId = UUID.randomUUID().toString();
+        publicador.publicar(eventoId, "5007", "SKU-QUE-NAO-EXISTE", 1);
+
+        ConsumerRecord<String, String> naDlq = aguardarNaDlq(eventoId);
+        int particao = ByteBuffer.wrap(cabecalhoBruto(naDlq, "kafka_dlt-original-partition")).getInt();
+        long offset = ByteBuffer.wrap(cabecalhoBruto(naDlq, "kafka_dlt-original-offset")).getLong();
+        TopicPartition origem = new TopicPartition(topico, particao);
+
+        Awaitility.await()
+                .atMost(PRAZO)
+                .pollInterval(Duration.ofMillis(200))
+                .until(new OffsetConfirmado(servidores, "estoque", origem, offset + 1));
+    }
+
     // ------------------------------------------------------------------
     // falha transitoria
     // ------------------------------------------------------------------
@@ -199,7 +228,7 @@ class CaminhoDeFalhaTest {
      * verdade parado esta no roteiro do README.
      */
     @Test
-    @Order(5)
+    @Order(6)
     @DisplayName("A5 - banco indisponivel e retentado, e o evento e processado quando ele volta")
     void falhaTransitoriaERetentada() {
         String eventoId = UUID.randomUUID().toString();
@@ -229,7 +258,7 @@ class CaminhoDeFalhaTest {
      * ate o limite de reprocessamentos).
      */
     @Test
-    @Order(6)
+    @Order(7)
     @DisplayName("A6 - corrigida a causa, o reprocessamento debita uma vez; reprocessar de novo nao debita")
     void reprocessamentoEIdempotente() {
         String eventoId = UUID.randomUUID().toString();
@@ -286,6 +315,39 @@ class CaminhoDeFalhaTest {
             return null;
         }
         return new String(cabecalho.value(), UTF_8);
+    }
+
+    private byte[] cabecalhoBruto(ConsumerRecord<String, String> registro, String nome) {
+        Header cabecalho = registro.headers().lastHeader(nome);
+        assertThat(cabecalho).as("cabecalho %s", nome).isNotNull();
+        return cabecalho.value();
+    }
+
+    /** Condicao do Awaitility: o grupo ja confirmou o offset esperado na particao. */
+    private static class OffsetConfirmado implements Callable<Boolean> {
+        private final String servidores;
+        private final String grupo;
+        private final TopicPartition particao;
+        private final long offsetEsperado;
+
+        OffsetConfirmado(String servidores, String grupo, TopicPartition particao, long offsetEsperado) {
+            this.servidores = servidores;
+            this.grupo = grupo;
+            this.particao = particao;
+            this.offsetEsperado = offsetEsperado;
+        }
+
+        @Override
+        public Boolean call() throws Exception {
+            Map<String, Object> config = new HashMap<String, Object>();
+            config.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, servidores);
+            try (Admin admin = Admin.create(config)) {
+                Map<TopicPartition, OffsetAndMetadata> confirmados =
+                        admin.listConsumerGroupOffsets(grupo).partitionsToOffsetAndMetadata().get();
+                OffsetAndMetadata confirmado = confirmados.get(particao);
+                return Boolean.valueOf(confirmado != null && confirmado.offset() >= offsetEsperado);
+            }
+        }
     }
 
     private boolean eventoFoiRegistrado(String eventoId) {

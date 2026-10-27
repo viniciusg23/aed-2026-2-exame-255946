@@ -76,8 +76,8 @@ spring:
 
     listener:
       # o ack e explicito, depois do commit. E tambem o UNICO modo em que o
-      # DefaultErrorHandler confirma sozinho o offset de um evento ja enviado
-      # para a DLQ.
+      # DefaultErrorHandler consegue confirmar o offset de um evento ja enviado
+      # para a DLQ (setCommitRecovered, no CaminhoDeFalhaConfig).
       ack-mode: manual_immediate
 
 logging:
